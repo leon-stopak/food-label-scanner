@@ -5,6 +5,10 @@ import type { LabelData } from "@/lib/convert";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
+// Swap to "gemini-3-flash-preview" for best accuracy (≈2× cost),
+// or "gemini-2.5-flash-lite" for the old cheap default.
+const MODEL = "gemini-3.1-flash-lite-preview";
+
 const PROMPT = `You are extracting nutrition facts from a US food label image.
 
 Return STRICT JSON (no prose, no markdown) matching this TypeScript shape:
@@ -37,11 +41,17 @@ Rules:
 
 export async function POST(req: NextRequest) {
   try {
-    const apiKey = process.env.GOOGLE_API_KEY;
+    // BYOK: prefer the key the user pasted in their browser, fall back to a
+    // server-side env var for owner/personal deployments.
+    const userKey = req.headers.get("x-google-api-key")?.trim();
+    const apiKey = userKey || process.env.GOOGLE_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: "Server missing GOOGLE_API_KEY env var." },
-        { status: 500 }
+        {
+          error:
+            "No API key. Open the ⚙ settings and paste your free Gemini key.",
+        },
+        { status: 401 }
       );
     }
 
@@ -51,7 +61,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No image provided." }, { status: 400 });
     }
     if (file.size > 8 * 1024 * 1024) {
-      return NextResponse.json({ error: "Image too large (max 8 MB)." }, { status: 413 });
+      return NextResponse.json(
+        { error: "Image too large (max 8 MB)." },
+        { status: 413 }
+      );
     }
 
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -60,7 +73,7 @@ export async function POST(req: NextRequest) {
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
+      model: MODEL,
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0.1,
@@ -85,10 +98,12 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(parsed);
   } catch (err: any) {
+    const msg = err?.message ?? "Unknown error.";
+    // Surface Google's auth errors back to the user in a readable way.
+    const status = /API key|permission|unauthorized|invalid/i.test(msg)
+      ? 401
+      : 500;
     console.error(err);
-    return NextResponse.json(
-      { error: err?.message ?? "Unknown error." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: msg }, { status });
   }
 }

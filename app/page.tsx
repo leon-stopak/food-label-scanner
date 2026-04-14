@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type Basis,
   type LabelData,
@@ -8,15 +8,51 @@ import {
   scaleNutrients,
 } from "@/lib/convert";
 
+const KEY_STORAGE = "glm_api_key_v1";
+
 export default function Home() {
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<LabelData | null>(null);
   const [basis, setBasis] = useState<Basis>("per_100");
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // Load key from localStorage on mount.
+  useEffect(() => {
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(KEY_STORAGE)
+        : null;
+    setApiKey(stored);
+    setKeyDraft(stored ?? "");
+    setHydrated(true);
+  }, []);
+
+  function saveKey() {
+    const trimmed = keyDraft.trim();
+    if (!trimmed) return;
+    window.localStorage.setItem(KEY_STORAGE, trimmed);
+    setApiKey(trimmed);
+    setSettingsOpen(false);
+    setError(null);
+  }
+
+  function clearKey() {
+    window.localStorage.removeItem(KEY_STORAGE);
+    setApiKey(null);
+    setKeyDraft("");
+  }
+
   async function handleFile(file: File) {
+    if (!apiKey) {
+      setSettingsOpen(true);
+      return;
+    }
     setError(null);
     setData(null);
     setPreview(URL.createObjectURL(file));
@@ -24,7 +60,11 @@ export default function Home() {
     try {
       const fd = new FormData();
       fd.append("image", file);
-      const res = await fetch("/api/scan", { method: "POST", body: fd });
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        body: fd,
+        headers: { "x-google-api-key": apiKey },
+      });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
       if (!json.nutrients || json.nutrients.length === 0) {
@@ -45,19 +85,44 @@ export default function Home() {
   }
 
   const scaled = data ? scaleNutrients(data, basis) : null;
+  const needsKey = hydrated && !apiKey;
 
   return (
     <main>
       <header>
         <h1>Label → Metric</h1>
-        <span className="tag">per 100 g / 100 mL</span>
+        <button
+          type="button"
+          className="btn secondary icon-btn"
+          onClick={() => setSettingsOpen(true)}
+          aria-label="Settings"
+          title="API key settings"
+        >
+          ⚙
+        </button>
       </header>
+
+      {needsKey && !settingsOpen && (
+        <div className="status">
+          No API key set yet.{" "}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => setSettingsOpen(true)}
+          >
+            Add your free Gemini key →
+          </button>
+        </div>
+      )}
 
       <div className="dropzone">
         <strong>Snap a US food label</strong>
         <p>It&apos;ll come back in real units.</p>
         <div className="btn-row">
-          <button onClick={() => fileRef.current?.click()} disabled={loading}>
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={loading || needsKey}
+          >
             {loading ? "Reading…" : "Take / choose photo"}
           </button>
           {data && (
@@ -96,9 +161,7 @@ export default function Home() {
         </div>
       )}
 
-      {error && !loading && (
-        <div className="status error">⚠️ {error}</div>
-      )}
+      {error && !loading && <div className="status error">⚠️ {error}</div>}
 
       {scaled && data && (
         <section className="result">
@@ -156,6 +219,68 @@ export default function Home() {
         AI-extracted values. Double-check before relying on them for medical or
         dietary decisions.
       </footer>
+
+      {settingsOpen && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSettingsOpen(false);
+          }}
+        >
+          <div className="modal" role="dialog" aria-modal="true">
+            <h3>Your Gemini API key</h3>
+            <p className="muted">
+              Stored only in this browser (localStorage). Never sent anywhere
+              except directly to Google when you scan a label.
+            </p>
+            <p className="muted" style={{ marginTop: 6 }}>
+              Get a free one at{" "}
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noreferrer"
+              >
+                aistudio.google.com/apikey
+              </a>{" "}
+              — free tier, no billing required.
+            </p>
+            <input
+              className="key-input"
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="AIza…"
+              value={keyDraft}
+              onChange={(e) => setKeyDraft(e.target.value)}
+            />
+            <div className="btn-row" style={{ justifyContent: "flex-end" }}>
+              {apiKey && (
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={clearKey}
+                >
+                  Remove
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => setSettingsOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveKey}
+                disabled={!keyDraft.trim()}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
